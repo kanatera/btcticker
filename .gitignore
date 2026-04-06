@@ -2,3 +2,8 @@ waveshare_epd
 config.yaml
 .idea/
 images/
+__pycache__/
+*.pyc
+simulation.png
+simulation_alert.png
+.venv/

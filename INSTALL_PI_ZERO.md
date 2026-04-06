@@ -63,11 +63,11 @@ sudo reboot
 
 ```bash
 sudo apt install -y git python3-pip \
-    python3-matplotlib python3-pil python3-rpi.gpio \
+    python3-matplotlib python3-pil python3-gpiozero \
     python3-spidev python3-yaml libopenblas0
 ```
 
-> Installing matplotlib/Pillow/RPi.GPIO via `apt` uses pre-compiled packages — much faster than `pip` on Pi Zero 2W.
+> Installing matplotlib/Pillow/gpiozero via `apt` uses pre-compiled packages — much faster than `pip` on Pi Zero 2W.
 
 ## 6. Clone the Repo
 
@@ -112,16 +112,21 @@ nano config.yaml
 Recommended settings for always-on use:
 ```yaml
 display:
-  orientation: 90     # landscape, buttons on left
+  orientation: 270    # landscape, buttons on right
   cycle: true
-  cyclefiat: false
+  cyclefiat: false    # fiatcurrency is ignored in Binance mode
   inverted: false
+  showvolume: false   # shows funding rate when true in Binance mode
+  showrank: false
+  24h: true
 ticker:
-  currency: bitcoin
-  fiatcurrency: usd
+  currency: bitcoin,ethereum,cardano  # CoinGecko IDs — mapped to BTCUSDT, ETHUSDT, ADAUSDT
+  fiatcurrency: usd                   # ignored in Binance mode; prices are always USDT
   sparklinedays: 1
-  updatefrequency: 300  # 5 min minimum — respect CoinGecko rate limits
+  updatefrequency: 300
 ```
+
+> **Data source:** Binance USDT perpetual futures is the default. To use CoinGecko instead, add `datasource: coingecko` under `ticker:`.
 
 ## 10. Test Run
 

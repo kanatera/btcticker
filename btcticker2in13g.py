@@ -61,6 +61,40 @@ headers = {
 }
 button_pressed = 0
 alert_queue = queue.Queue()
+_epd = None  # singleton EPD instance — avoids re-init flicker
+
+# Display resolution for Waveshare 2.13inch e-Paper HAT (G)
+EPD_W = 296
+EPD_H = 160
+
+# CoinGecko ID → Binance USDT perpetual symbol
+COINGECKO_TO_BINANCE = {
+    "bitcoin":                   "BTCUSDT",
+    "ethereum":                  "ETHUSDT",
+    "cardano":                   "ADAUSDT",
+    "binancecoin":               "BNBUSDT",
+    "solana":                    "SOLUSDT",
+    "ripple":                    "XRPUSDT",
+    "polkadot":                  "DOTUSDT",
+    "dogecoin":                  "DOGEUSDT",
+    "avalanche-2":               "AVAXUSDT",
+    "chainlink":                 "LINKUSDT",
+    "litecoin":                  "LTCUSDT",
+    "uniswap":                   "UNIUSDT",
+    "stellar":                   "XLMUSDT",
+    "cosmos":                    "ATOMUSDT",
+    "near":                      "NEARUSDT",
+    "matic-network":             "MATICUSDT",
+    "the-sandbox":               "SANDUSDT",
+    "decentraland":              "MANAUSDT",
+    "aave":                      "AAVEUSDT",
+    "shiba-inu":                 "SHIBUSDT",
+    "tron":                      "TRXUSDT",
+    "filecoin":                  "FILUSDT",
+    "fantom":                    "FTMUSDT",
+    "maker":                     "MKRUSDT",
+    "monero":                    "XMRUSDT",
+}
 
 
 def internet(hostname="google.com"):
@@ -125,7 +159,7 @@ def getgecko(url):
 
 
 def getData(config, other):
-    if config["ticker"].get("datasource") == "binance_perp":
+    if config["ticker"].get("datasource") != "coingecko":
         return getBinanceFutures(config, other)
     sleep_time = 10
     num_retries = 5
@@ -210,7 +244,13 @@ def getData(config, other):
 
 
 def getBinanceFutures(config, other):
-    """Fetch BTCUSDT perpetual futures price and kline history from Binance FAPI."""
+    """Fetch perpetual futures price and kline history from Binance FAPI."""
+    whichcoin, _ = configtocoinandfiat(config)
+
+    # Resolve CoinGecko ID to Binance symbol; fall back to uppercased ID + USDT
+    symbol = COINGECKO_TO_BINANCE.get(whichcoin, whichcoin.upper().replace("-", "") + "USDT")
+    logging.info("Binance symbol: %s", symbol)
+
     days_ago = int(config["ticker"]["sparklinedays"])
     limit = min(days_ago * 24, 1500)  # hourly candles, Binance max 1500
     sleep_time = 10
@@ -221,13 +261,13 @@ def getBinanceFutures(config, other):
             # Historical klines for sparkline
             klines_url = (
                 "https://fapi.binance.com/fapi/v1/klines"
-                "?symbol=BTCUSDT&interval=1h&limit=" + str(limit)
+                "?symbol=" + symbol + "&interval=1h&limit=" + str(limit)
             )
             klines = requests.get(klines_url, headers=headers, timeout=10).json()
             pricestack = [float(k[4]) for k in klines]  # close prices
 
             # Live mark price + funding rate
-            mark_url = "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT"
+            mark_url = "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=" + symbol
             mark_data = requests.get(mark_url, headers=headers, timeout=10).json()
             pricenow = float(mark_data["markPrice"])
             funding_rate = float(mark_data["lastFundingRate"]) * 100  # as percent
@@ -237,6 +277,7 @@ def getBinanceFutures(config, other):
             other["volume"] = 0
             other["market_cap_rank"] = 0
             other["funding_rate"] = funding_rate
+            other["quote"] = "USDT"
             return pricestack, other
 
         except Exception as e:
@@ -249,10 +290,10 @@ def getBinanceFutures(config, other):
 
 def beanaproblem(message):
     thebean = Image.open(os.path.join(picdir, "thebean.bmp"))
-    image = Image.new("RGB", (250, 122), WHITE)
+    image = Image.new("RGB", (EPD_W, EPD_H), WHITE)
     draw = ImageDraw.Draw(image)
     bean_rgb = thebean.convert("RGB")
-    image.paste(bean_rgb, (60, 10))
+    image.paste(bean_rgb, (80, 10))
     draw.text((10, 5), str(time.strftime("%-H:%M, %-d %b %Y")), font=font_date, fill=BLACK)
     writewrappedlines(image, "Issue: " + message, fill=RED)
     return image
@@ -295,7 +336,8 @@ def updateDisplay(config, pricestack, other):
     pricenow = pricestack[-1]
     pricechangeraw = round((pricestack[-1] - pricestack[0]) / pricestack[-1] * 100, 2)
     positive_change = pricechangeraw >= 0
-    change_color = YELLOW if positive_change else RED
+    # Yellow is near-invisible on white ePaper — use BLACK for positive, RED for negative
+    change_color = BLACK if positive_change else RED
 
     if pricechangeraw >= 10:
         pricechange = str("%+d" % pricechangeraw) + "%"
@@ -309,7 +351,8 @@ def updateDisplay(config, pricestack, other):
 
     localetag = config["display"].get("locale", "en_US")
 
-    fiatupper = fiat.upper()
+    # In Binance mode other["quote"] is set to "USDT"; fall back to configured fiat
+    fiatupper = other.get("quote", fiat).upper()
     if fiatupper == "USDT":
         fiatupper = "USD"
     if fiatupper == "BTC":
@@ -321,7 +364,7 @@ def updateDisplay(config, pricestack, other):
     else:
         pricestring = format_currency(pricenow, fiatupper, locale=localetag, decimal_quantization=False)
     if len(pricestring) > 9:
-        fontreduce = 15
+        fontreduce = 4
 
     # Token image
     currencythumbnail = "currency/" + whichcoin + ".bmp"
@@ -349,60 +392,60 @@ def updateDisplay(config, pricestack, other):
     ATHbitmap = Image.open(os.path.join(picdir, "ATH.bmp")).convert("RGB")
 
     try:
-        font_price_ls = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 18 - fontreduce)
-        font_price_pt = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 16 - fontreduce)
+        font_price_ls = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 26 - fontreduce)
+        font_price_pt = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 22 - fontreduce)
     except OSError:
         font_price_ls = ImageFont.load_default()
         font_price_pt = ImageFont.load_default()
 
-    # Landscape layout (250x122) for orientations 90 and 270
+    # Landscape layout (296x160) for orientations 90 and 270
     if config["display"]["orientation"] in (90, 270):
-        image = Image.new("RGB", (250, 122), WHITE)
+        image = Image.new("RGB", (EPD_W, EPD_H), WHITE)
         draw = ImageDraw.Draw(image)
 
         # Token left side, vertically centred
-        image.paste(tokenimage.resize((80, 80), Image.BICUBIC), (0, 21))
+        image.paste(tokenimage.resize((80, 80), Image.BICUBIC), (2, 40))
 
-        # Right panel: timestamp, price, change, volume
-        draw.text((85, 4),  timestamp, font=font_date, fill=BLACK)
-        draw.text((85, 20), pricestring, font=font_price_ls, fill=BLACK)
-        draw.text((85, 44), str(days_ago) + " day : ", font=font_date, fill=BLACK)
-        draw.text((145, 44), pricechange, font=font_date, fill=change_color)
+        # Right panel: timestamp, large price, change, optional stats
+        draw.text((88, 3),  timestamp, font=font_date, fill=BLACK)
+        draw.text((88, 18), pricestring, font=font_price_ls, fill=BLACK)
+        draw.text((88, 60), str(days_ago) + " day : ", font=font_date, fill=BLACK)
+        draw.text((148, 60), pricechange, font=font_date, fill=change_color)
 
         if config["ticker"].get("datasource") == "binance_perp" and "funding_rate" in other:
             fr = other["funding_rate"]
-            fr_color = YELLOW if fr >= 0 else RED
-            draw.text((85, 57), "fund: " + ("%+.4f" % fr) + "%", font=font_date, fill=fr_color)
+            fr_color = BLACK if fr >= 0 else RED
+            draw.text((88, 74), "fund: " + ("%+.4f" % fr) + "%", font=font_date, fill=fr_color)
         elif config["display"].get("showvolume"):
-            draw.text((85, 57), "vol : " + human_format(other["volume"]), font=font_date, fill=BLACK)
+            draw.text((88, 74), "vol : " + human_format(other["volume"]), font=font_date, fill=BLACK)
 
         if config["display"].get("showrank") and other.get("market_cap_rank", 0) > 1:
-            draw.text((85, 70), "rank : " + str(other["market_cap_rank"]), font=font_date, fill=BLACK)
+            draw.text((88, 87), "rank : " + str(other["market_cap_rank"]), font=font_date, fill=BLACK)
 
         if other.get("ATH"):
-            image.paste(ATHbitmap, (210, 4))
+            image.paste(ATHbitmap, (262, 3))
 
-        # Sparkline bottom strip
-        spark_ls = sparkbitmap.resize((165, 40), Image.BICUBIC)
-        image.paste(spark_ls, (85, 80))
+        # Sparkline — bottom-right strip
+        spark_ls = sparkbitmap.resize((205, 55), Image.BICUBIC)
+        image.paste(spark_ls, (88, 102))
 
         if config["display"]["orientation"] == 270:
             image = image.rotate(180, expand=True)
 
-    # Portrait layout (122x250) for orientations 0 and 180
+    # Portrait layout (160x296) for orientations 0 and 180
     else:
-        image = Image.new("RGB", (122, 250), WHITE)
+        image = Image.new("RGB", (EPD_H, EPD_W), WHITE)
         draw = ImageDraw.Draw(image)
 
-        draw.text((5, 5), timestamp, font=font_date, fill=BLACK)
-        image.paste(tokenimage.resize((80, 80), Image.BICUBIC), (21, 20))
+        draw.text((5, 3), timestamp, font=font_date, fill=BLACK)
+        image.paste(tokenimage.resize((80, 80), Image.BICUBIC), (40, 20))
         draw.text((5, 108), str(days_ago) + " day :", font=font_date, fill=BLACK)
         draw.text((5, 121), pricechange, font=font_date, fill=change_color)
         draw.text((5, 138), pricestring, font=font_price_pt, fill=BLACK)
 
-        # Sparkline resized to fit portrait width
-        spark_pt = sparkbitmap.resize((110, 34), Image.BICUBIC)
-        image.paste(spark_pt, (6, 178))
+        # Sparkline resized to fill portrait width
+        spark_pt = sparkbitmap.resize((148, 48), Image.BICUBIC)
+        image.paste(spark_pt, (6, 208))
 
         if config["display"]["orientation"] == 180:
             image = image.rotate(180, expand=True)
@@ -431,10 +474,12 @@ def currencycycle(curr_string):
 
 
 def display_image(img):
-    epd = epd2in13g.EPD()
-    epd.init()
-    epd.display(epd.getbuffer(img))
-    epd.sleep()
+    global _epd
+    if _epd is None:
+        _epd = epd2in13g.EPD()
+    _epd.init()
+    _epd.display(_epd.getbuffer(img))
+    _epd.sleep()
     logging.info("Sent image to screen")
 
 
@@ -547,22 +592,22 @@ def render_alert(text, config):
     orientation = config["display"]["orientation"]
 
     if orientation in (90, 270):
-        image = Image.new("RGB", (250, 122), WHITE)
+        image = Image.new("RGB", (EPD_W, EPD_H), WHITE)
         draw = ImageDraw.Draw(image)
-        draw.rectangle([(0, 0), (250, 20)], fill=RED)
+        draw.rectangle([(0, 0), (EPD_W, 20)], fill=RED)
         draw.text((6, 4), "TRADINGVIEW ALERT", font=font_date, fill=WHITE)
-        lines = textwrap.wrap(text, width=40)
-        for i, line in enumerate(lines[:5]):
+        lines = textwrap.wrap(text, width=48)
+        for i, line in enumerate(lines[:7]):
             draw.text((6, 26 + i * 14), line, font=font_body, fill=BLACK)
         if orientation == 270:
             image = image.rotate(180, expand=True)
     else:
-        image = Image.new("RGB", (122, 250), WHITE)
+        image = Image.new("RGB", (EPD_H, EPD_W), WHITE)
         draw = ImageDraw.Draw(image)
-        draw.rectangle([(0, 0), (122, 20)], fill=RED)
+        draw.rectangle([(0, 0), (EPD_H, 20)], fill=RED)
         draw.text((4, 4), "TV ALERT", font=font_date, fill=WHITE)
-        lines = textwrap.wrap(text, width=18)
-        for i, line in enumerate(lines[:12]):
+        lines = textwrap.wrap(text, width=22)
+        for i, line in enumerate(lines[:14]):
             draw.text((4, 26 + i * 18), line, font=font_body, fill=BLACK)
         if orientation == 180:
             image = image.rotate(180, expand=True)
@@ -684,7 +729,6 @@ def main():
                     config["ticker"]["currency"] = ",".join(crypto_list)
                     if config["display"].get("cyclefiat"):
                         config["ticker"]["fiatcurrency"] = ",".join(fiat_list)
-                    config["display"]["inverted"] = not config["display"]["inverted"]
                 lastcoinfetch = fullupdate(config, lastcoinfetch)
                 datapulled = True
 
@@ -699,7 +743,8 @@ def main():
     except KeyboardInterrupt:
         logging.info("ctrl + c:")
         display_image(beanaproblem("Keyboard Interrupt"))
-        epd2in13g.epdconfig.module_exit()
+        if _epd is not None:
+            epd2in13g.epdconfig.module_exit()
         exit()
 
 

@@ -64,7 +64,7 @@ sudo reboot
 ```bash
 sudo apt install -y git python3-pip \
     python3-matplotlib python3-pil python3-rpi.gpio \
-    python3-yaml libopenblas0
+    python3-spidev python3-yaml libopenblas0
 ```
 
 > Installing matplotlib/Pillow/RPi.GPIO via `apt` uses pre-compiled packages — much faster than `pip` on Pi Zero 2W.
@@ -95,8 +95,12 @@ ls ~/btcticker/waveshare_epd/epd2in13g.py
 
 ```bash
 cd ~/btcticker
-python3 -m pip install --user -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
+
+> **Python 3.13+:** `PyYAML==6.0` fails to build on Python 3.13 due to a Cython compatibility issue. `requirements.txt` pins `6.0.2` which fixes this. If you see a `cython_sources` error, make sure you have the latest `requirements.txt`.
 
 ## 9. Configure
 
@@ -144,7 +148,7 @@ Wants=network-online.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/btcticker
-ExecStart=/usr/bin/python3 /home/pi/btcticker/btcticker2in13g.py
+ExecStart=/home/pi/btcticker/.venv/bin/python3 /home/pi/btcticker/btcticker2in13g.py
 Restart=always
 RestartSec=30
 StandardOutput=journal

@@ -34,7 +34,7 @@ import currency
 import os
 import sys
 import logging
-import RPi.GPIO as GPIO
+from gpiozero import Button as GPIOButton
 from waveshare_epd import epd2in13g
 import time
 import threading
@@ -435,35 +435,31 @@ def display_image(img):
     epd.init()
     epd.display(epd.getbuffer(img))
     epd.sleep()
-    thekeys = initkeys()
-    removekeyevent(thekeys)
-    addkeyevent(thekeys)
     logging.info("Sent image to screen")
 
 
 def initkeys():
-    key1, key2, key3, key4 = 5, 6, 13, 19
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setup(key1, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    GPIO.setup(key2, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    GPIO.setup(key3, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    GPIO.setup(key4, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    return [key1, key2, key3, key4]
+    bounce = 0.5
+    buttons = [
+        GPIOButton(5,  pull_up=True, bounce_time=bounce),
+        GPIOButton(6,  pull_up=True, bounce_time=bounce),
+        GPIOButton(13, pull_up=True, bounce_time=bounce),
+        GPIOButton(19, pull_up=True, bounce_time=bounce),
+    ]
+    buttons[0].when_pressed = lambda: keypress(5)
+    buttons[1].when_pressed = lambda: keypress(6)
+    buttons[2].when_pressed = lambda: keypress(13)
+    buttons[3].when_pressed = lambda: keypress(19)
+    return buttons
 
 
 def addkeyevent(thekeys):
-    btime = 500
-    GPIO.add_event_detect(thekeys[0], GPIO.FALLING, callback=keypress, bouncetime=btime)
-    GPIO.add_event_detect(thekeys[1], GPIO.FALLING, callback=keypress, bouncetime=btime)
-    GPIO.add_event_detect(thekeys[2], GPIO.FALLING, callback=keypress, bouncetime=btime)
-    GPIO.add_event_detect(thekeys[3], GPIO.FALLING, callback=keypress, bouncetime=btime)
+    pass  # callbacks set in initkeys()
 
 
 def removekeyevent(thekeys):
-    GPIO.remove_event_detect(thekeys[0])
-    GPIO.remove_event_detect(thekeys[1])
-    GPIO.remove_event_detect(thekeys[2])
-    GPIO.remove_event_detect(thekeys[3])
+    for btn in thekeys:
+        btn.when_pressed = None
 
 
 def keypress(channel):
@@ -628,7 +624,6 @@ def sse_listener(config, alert_q):
 
 
 def main():
-    GPIO.setmode(GPIO.BCM)
     parser = argparse.ArgumentParser()
     parser.add_argument("--log", default="info", help="Set the log level (default: info)")
     args = parser.parse_args()
@@ -705,7 +700,6 @@ def main():
         logging.info("ctrl + c:")
         display_image(beanaproblem("Keyboard Interrupt"))
         epd2in13g.epdconfig.module_exit()
-        GPIO.cleanup()
         exit()
 
 

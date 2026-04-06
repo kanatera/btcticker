@@ -393,7 +393,7 @@ def updateDisplay(config, pricestack, other):
     ATHbitmap = Image.open(os.path.join(picdir, "ATH.bmp")).convert("RGB")
 
     try:
-        font_price_ls = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 30 - fontreduce)
+        font_price_ls = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 36 - fontreduce)
         font_price_pt = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 26 - fontreduce)
     except OSError:
         font_price_ls = ImageFont.load_default()
@@ -404,31 +404,31 @@ def updateDisplay(config, pricestack, other):
         image = Image.new("RGB", (EPD_W, EPD_H), WHITE)  # 296x160
         draw = ImageDraw.Draw(image)
 
-        # Token left side, vertically centred: (160-100)//2 = 30
-        image.paste(tokenimage.resize((100, 100), Image.BICUBIC), (4, 30))
+        # Token left side, vertically centred: (160-70)//2 = 45
+        image.paste(tokenimage.resize((70, 70), Image.BICUBIC), (4, 45))
 
-        # Right panel: x=112 onward (184px wide × 160px tall)
-        draw.text((112, 5),  timestamp, font=font_date, fill=BLACK)
-        draw.text((112, 20), pricestring, font=font_price_ls, fill=BLACK)
-        draw.text((112, 68), str(days_ago) + " day : ", font=font_date, fill=BLACK)
-        draw.text((180, 68), pricechange, font=font_date, fill=change_color)
+        # Right panel: x=82 onward (214px wide × 160px tall)
+        draw.text((82, 5),  timestamp, font=font_date, fill=BLACK)
+        draw.text((82, 20), pricestring, font=font_price_ls, fill=BLACK)
+        draw.text((82, 72), str(days_ago) + " day : ", font=font_date, fill=BLACK)
+        draw.text((150, 72), pricechange, font=font_date, fill=change_color)
 
         if config["ticker"].get("datasource") != "coingecko" and "funding_rate" in other:
             fr = other["funding_rate"]
             fr_color = BLACK if fr >= 0 else RED
-            draw.text((112, 82), "fund: " + ("%+.4f" % fr) + "%", font=font_date, fill=fr_color)
+            draw.text((82, 86), "fund: " + ("%+.4f" % fr) + "%", font=font_date, fill=fr_color)
         elif config["display"].get("showvolume"):
-            draw.text((112, 82), "vol : " + human_format(other["volume"]), font=font_date, fill=BLACK)
+            draw.text((82, 86), "vol : " + human_format(other["volume"]), font=font_date, fill=BLACK)
 
         if config["display"].get("showrank") and other.get("market_cap_rank", 0) > 1:
-            draw.text((112, 96), "rank : " + str(other["market_cap_rank"]), font=font_date, fill=BLACK)
+            draw.text((82, 100), "rank : " + str(other["market_cap_rank"]), font=font_date, fill=BLACK)
 
         if other.get("ATH"):
             image.paste(ATHbitmap, (258, 5))
 
-        # Sparkline — bottom-right: 180px wide × 58px tall
-        spark_ls = sparkbitmap.resize((180, 58), Image.BICUBIC)
-        image.paste(spark_ls, (112, 100))
+        # Sparkline — bottom-right: 210px wide × 58px tall
+        spark_ls = sparkbitmap.resize((210, 56), Image.BICUBIC)
+        image.paste(spark_ls, (82, 102))
 
         # Rotate landscape 296x160 → portrait 160x296 for driver
         if config["display"]["orientation"] == 90:

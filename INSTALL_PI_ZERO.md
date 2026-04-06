@@ -121,12 +121,14 @@ display:
   24h: true
 ticker:
   currency: bitcoin,ethereum,cardano  # CoinGecko IDs — mapped to BTCUSDT, ETHUSDT, ADAUSDT
-  fiatcurrency: usd                   # ignored in Binance mode; prices are always USDT
+  fiatcurrency: usd                   # ignored in Binance mode; prices always displayed in USDT
   sparklinedays: 1
   updatefrequency: 300
 ```
 
 > **Data source:** Binance USDT perpetual futures is the default. To use CoinGecko instead, add `datasource: coingecko` under `ticker:`.
+>
+> **Display resolution:** The driver always expects a portrait 122×250 image. Landscape orientations (90/270) are rendered internally and rotated before being passed to the driver.
 
 ## 10. Test Run
 

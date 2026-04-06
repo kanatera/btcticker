@@ -64,8 +64,9 @@ alert_queue = queue.Queue()
 _epd = None  # singleton EPD instance — avoids re-init flicker
 
 # Display resolution for Waveshare 2.13inch e-Paper HAT (G)
-EPD_W = 296
-EPD_H = 160
+# Driver always expects portrait 122×250 — landscape layouts are rotated before passing.
+EPD_W = 250
+EPD_H = 122
 
 # CoinGecko ID → Binance USDT perpetual symbol
 COINGECKO_TO_BINANCE = {
@@ -290,11 +291,11 @@ def getBinanceFutures(config, other):
 
 def beanaproblem(message):
     thebean = Image.open(os.path.join(picdir, "thebean.bmp"))
-    image = Image.new("RGB", (EPD_W, EPD_H), WHITE)
+    image = Image.new("RGB", (EPD_H, EPD_W), WHITE)  # always portrait 122x250
     draw = ImageDraw.Draw(image)
     bean_rgb = thebean.convert("RGB")
-    image.paste(bean_rgb, (80, 10))
-    draw.text((10, 5), str(time.strftime("%-H:%M, %-d %b %Y")), font=font_date, fill=BLACK)
+    image.paste(bean_rgb, (21, 10))
+    draw.text((5, 5), str(time.strftime("%-H:%M, %-d %b %Y")), font=font_date, fill=BLACK)
     writewrappedlines(image, "Issue: " + message, fill=RED)
     return image
 
@@ -398,13 +399,13 @@ def updateDisplay(config, pricestack, other):
         font_price_ls = ImageFont.load_default()
         font_price_pt = ImageFont.load_default()
 
-    # Landscape layout (296x160) for orientations 90 and 270
+    # Landscape layout (250x122) — rotated to portrait 122x250 for driver
     if config["display"]["orientation"] in (90, 270):
-        image = Image.new("RGB", (EPD_W, EPD_H), WHITE)
+        image = Image.new("RGB", (EPD_W, EPD_H), WHITE)  # 250x122
         draw = ImageDraw.Draw(image)
 
-        # Token left side, vertically centred
-        image.paste(tokenimage.resize((80, 80), Image.BICUBIC), (2, 40))
+        # Token left side, vertically centred in 122px height
+        image.paste(tokenimage.resize((80, 80), Image.BICUBIC), (2, 21))
 
         # Right panel: timestamp, large price, change, optional stats
         draw.text((88, 3),  timestamp, font=font_date, fill=BLACK)
@@ -412,7 +413,7 @@ def updateDisplay(config, pricestack, other):
         draw.text((88, 60), str(days_ago) + " day : ", font=font_date, fill=BLACK)
         draw.text((148, 60), pricechange, font=font_date, fill=change_color)
 
-        if config["ticker"].get("datasource") == "binance_perp" and "funding_rate" in other:
+        if config["ticker"].get("datasource") != "coingecko" and "funding_rate" in other:
             fr = other["funding_rate"]
             fr_color = BLACK if fr >= 0 else RED
             draw.text((88, 74), "fund: " + ("%+.4f" % fr) + "%", font=font_date, fill=fr_color)
@@ -423,29 +424,33 @@ def updateDisplay(config, pricestack, other):
             draw.text((88, 87), "rank : " + str(other["market_cap_rank"]), font=font_date, fill=BLACK)
 
         if other.get("ATH"):
-            image.paste(ATHbitmap, (262, 3))
+            image.paste(ATHbitmap, (210, 3))
 
         # Sparkline — bottom-right strip
-        spark_ls = sparkbitmap.resize((205, 55), Image.BICUBIC)
-        image.paste(spark_ls, (88, 102))
+        spark_ls = sparkbitmap.resize((160, 40), Image.BICUBIC)
+        image.paste(spark_ls, (88, 80))
 
-        if config["display"]["orientation"] == 270:
-            image = image.rotate(180, expand=True)
+        # Rotate landscape 250x122 → portrait 122x250 for driver
+        # orientation 90 = CCW 90°, orientation 270 = CW 90°
+        if config["display"]["orientation"] == 90:
+            image = image.rotate(90, expand=True)
+        else:
+            image = image.rotate(270, expand=True)
 
-    # Portrait layout (160x296) for orientations 0 and 180
+    # Portrait layout (122x250) for orientations 0 and 180
     else:
-        image = Image.new("RGB", (EPD_H, EPD_W), WHITE)
+        image = Image.new("RGB", (EPD_H, EPD_W), WHITE)  # 122x250
         draw = ImageDraw.Draw(image)
 
         draw.text((5, 3), timestamp, font=font_date, fill=BLACK)
-        image.paste(tokenimage.resize((80, 80), Image.BICUBIC), (40, 20))
+        image.paste(tokenimage.resize((80, 80), Image.BICUBIC), (21, 20))
         draw.text((5, 108), str(days_ago) + " day :", font=font_date, fill=BLACK)
         draw.text((5, 121), pricechange, font=font_date, fill=change_color)
         draw.text((5, 138), pricestring, font=font_price_pt, fill=BLACK)
 
-        # Sparkline resized to fill portrait width
-        spark_pt = sparkbitmap.resize((148, 48), Image.BICUBIC)
-        image.paste(spark_pt, (6, 208))
+        # Sparkline resized to fit portrait width
+        spark_pt = sparkbitmap.resize((110, 34), Image.BICUBIC)
+        image.paste(spark_pt, (6, 195))
 
         if config["display"]["orientation"] == 180:
             image = image.rotate(180, expand=True)
@@ -592,22 +597,24 @@ def render_alert(text, config):
     orientation = config["display"]["orientation"]
 
     if orientation in (90, 270):
-        image = Image.new("RGB", (EPD_W, EPD_H), WHITE)
+        image = Image.new("RGB", (EPD_W, EPD_H), WHITE)  # 250x122
         draw = ImageDraw.Draw(image)
         draw.rectangle([(0, 0), (EPD_W, 20)], fill=RED)
         draw.text((6, 4), "TRADINGVIEW ALERT", font=font_date, fill=WHITE)
-        lines = textwrap.wrap(text, width=48)
-        for i, line in enumerate(lines[:7]):
+        lines = textwrap.wrap(text, width=40)
+        for i, line in enumerate(lines[:5]):
             draw.text((6, 26 + i * 14), line, font=font_body, fill=BLACK)
-        if orientation == 270:
-            image = image.rotate(180, expand=True)
+        if orientation == 90:
+            image = image.rotate(90, expand=True)
+        else:
+            image = image.rotate(270, expand=True)
     else:
-        image = Image.new("RGB", (EPD_H, EPD_W), WHITE)
+        image = Image.new("RGB", (EPD_H, EPD_W), WHITE)  # 122x250
         draw = ImageDraw.Draw(image)
         draw.rectangle([(0, 0), (EPD_H, 20)], fill=RED)
         draw.text((4, 4), "TV ALERT", font=font_date, fill=WHITE)
-        lines = textwrap.wrap(text, width=22)
-        for i, line in enumerate(lines[:14]):
+        lines = textwrap.wrap(text, width=18)
+        for i, line in enumerate(lines[:12]):
             draw.text((4, 26 + i * 18), line, font=font_body, fill=BLACK)
         if orientation == 180:
             image = image.rotate(180, expand=True)

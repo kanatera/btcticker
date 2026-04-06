@@ -587,8 +587,8 @@ def gettrending(config):
 def render_alert(text, config):
     """Render a TradingView alert as a full-screen image."""
     try:
-        font_body = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 18)
-        font_hdr  = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 14)
+        font_body = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 24)
+        font_hdr  = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 16)
     except OSError:
         font_body = ImageFont.load_default()
         font_hdr  = font_body
@@ -596,28 +596,28 @@ def render_alert(text, config):
     orientation = config["display"]["orientation"]
 
     if orientation in (90, 270):
-        # Landscape 296x160: header 30px tall, body fills remaining 130px
+        # Landscape 296x160: header 32px tall, body fills remaining 128px
         image = Image.new("RGB", (EPD_W, EPD_H), WHITE)
         draw = ImageDraw.Draw(image)
-        draw.rectangle([(0, 0), (EPD_W, 30)], fill=RED)
+        draw.rectangle([(0, 0), (EPD_W, 32)], fill=RED)
         draw.text((8, 8), "TRADINGVIEW ALERT", font=font_hdr, fill=WHITE)
-        # ~30 chars per line at size 18 on 296px wide canvas
-        lines = textwrap.wrap(text, width=30)
+        # ~21 chars per line at size 24 on 296px wide canvas
+        lines = textwrap.wrap(text, width=21)
         for i, line in enumerate(lines[:4]):
-            draw.text((8, 38 + i * 26), line, font=font_body, fill=BLACK)
+            draw.text((8, 38 + i * 30), line, font=font_body, fill=BLACK)
         if orientation == 90:
             image = image.rotate(90, expand=True)
         else:
             image = image.rotate(270, expand=True)
     else:
-        # Portrait 160x296: header 30px tall, body fills remaining 266px
+        # Portrait 160x296: header 32px tall, body fills remaining 264px
         image = Image.new("RGB", (EPD_H, EPD_W), WHITE)
         draw = ImageDraw.Draw(image)
-        draw.rectangle([(0, 0), (EPD_H, 30)], fill=RED)
+        draw.rectangle([(0, 0), (EPD_H, 32)], fill=RED)
         draw.text((8, 8), "TV ALERT", font=font_hdr, fill=WHITE)
-        lines = textwrap.wrap(text, width=18)
-        for i, line in enumerate(lines[:10]):
-            draw.text((8, 38 + i * 26), line, font=font_body, fill=BLACK)
+        lines = textwrap.wrap(text, width=13)
+        for i, line in enumerate(lines[:8]):
+            draw.text((8, 38 + i * 30), line, font=font_body, fill=BLACK)
         if orientation == 180:
             image = image.rotate(180, expand=True)
 

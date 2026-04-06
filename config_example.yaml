@@ -17,3 +17,8 @@ ticker:
   # datasource: binance_perp  # Uncomment to use Binance BTCUSDT perpetual futures instead of CoinGecko
   #   When enabled: set currency to 'bitcoin' (for the logo), fiatcurrency to 'usd'
   #   Price = mark price, sparkline = hourly closes, funding rate shown instead of volume
+# alerts:
+#   server: http://192.168.1.x:PORT   # Base URL of your TradingView alert relay app
+#   username: your_username           # Auto-login credentials (recommended)
+#   password: your_password           #   token is fetched at startup and refreshed on expiry
+#   display_seconds: 10               # How long to show an alert before resuming price display

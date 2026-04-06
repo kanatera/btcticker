@@ -587,34 +587,37 @@ def gettrending(config):
 def render_alert(text, config):
     """Render a TradingView alert as a full-screen image."""
     try:
-        font_title = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 14)
-        font_body  = ImageFont.truetype(os.path.join(fontdir, "Roboto-Light.ttf"), 12)
+        font_body = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 18)
+        font_hdr  = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 14)
     except OSError:
-        font_title = ImageFont.load_default()
-        font_body  = ImageFont.load_default()
+        font_body = ImageFont.load_default()
+        font_hdr  = font_body
 
     orientation = config["display"]["orientation"]
 
     if orientation in (90, 270):
-        image = Image.new("RGB", (EPD_W, EPD_H), WHITE)  # 296x160
+        # Landscape 296x160: header 30px tall, body fills remaining 130px
+        image = Image.new("RGB", (EPD_W, EPD_H), WHITE)
         draw = ImageDraw.Draw(image)
-        draw.rectangle([(0, 0), (EPD_W, 20)], fill=RED)
-        draw.text((6, 4), "TRADINGVIEW ALERT", font=font_date, fill=WHITE)
-        lines = textwrap.wrap(text, width=48)
-        for i, line in enumerate(lines[:6]):
-            draw.text((6, 26 + i * 14), line, font=font_body, fill=BLACK)
+        draw.rectangle([(0, 0), (EPD_W, 30)], fill=RED)
+        draw.text((8, 8), "TRADINGVIEW ALERT", font=font_hdr, fill=WHITE)
+        # ~30 chars per line at size 18 on 296px wide canvas
+        lines = textwrap.wrap(text, width=30)
+        for i, line in enumerate(lines[:4]):
+            draw.text((8, 38 + i * 26), line, font=font_body, fill=BLACK)
         if orientation == 90:
             image = image.rotate(90, expand=True)
         else:
             image = image.rotate(270, expand=True)
     else:
-        image = Image.new("RGB", (EPD_H, EPD_W), WHITE)  # 160x296
+        # Portrait 160x296: header 30px tall, body fills remaining 266px
+        image = Image.new("RGB", (EPD_H, EPD_W), WHITE)
         draw = ImageDraw.Draw(image)
-        draw.rectangle([(0, 0), (EPD_H, 20)], fill=RED)
-        draw.text((4, 4), "TV ALERT", font=font_date, fill=WHITE)
-        lines = textwrap.wrap(text, width=22)
-        for i, line in enumerate(lines[:14]):
-            draw.text((4, 26 + i * 18), line, font=font_body, fill=BLACK)
+        draw.rectangle([(0, 0), (EPD_H, 30)], fill=RED)
+        draw.text((8, 8), "TV ALERT", font=font_hdr, fill=WHITE)
+        lines = textwrap.wrap(text, width=18)
+        for i, line in enumerate(lines[:10]):
+            draw.text((8, 38 + i * 26), line, font=font_body, fill=BLACK)
         if orientation == 180:
             image = image.rotate(180, expand=True)
 
@@ -625,11 +628,35 @@ def render_alert(text, config):
     return image
 
 
+def alert_login(alerts_cfg):
+    """Login to the alert server and return a fresh session token."""
+    server = alerts_cfg.get("server", "").rstrip("/")
+    username = alerts_cfg.get("username", "")
+    password = alerts_cfg.get("password", "")
+    if not username or not password:
+        return alerts_cfg.get("session_token", "")
+    try:
+        resp = requests.post(
+            server + "/api/auth/login",
+            json={"username": username, "password": password},
+            headers=headers,
+            timeout=10
+        )
+        token = resp.cookies.get("trade_alert_session", "")
+        if token:
+            logging.info("Alert server: login successful")
+        else:
+            logging.warning("Alert server: login returned no session cookie")
+        return token
+    except Exception as e:
+        logging.error("Alert server login failed: %s", e)
+        return ""
+
+
 def sse_listener(config, alert_q):
     """Background thread: streams the TradingView app SSE endpoint and queues alert text."""
     alerts_cfg = config.get("alerts", {})
     server = alerts_cfg.get("server", "").rstrip("/")
-    session_token = alerts_cfg.get("session_token", "")
 
     if not server:
         logging.info("alerts.server not configured — SSE listener disabled")
@@ -637,8 +664,11 @@ def sse_listener(config, alert_q):
 
     sse_url      = server + "/api/messages/stream"
     messages_url = server + "/api/messages?page=1&limit=1"
-    cookies = {"trade_alert_session": session_token} if session_token else {}
     retry_delay = 5
+
+    # Login once at startup; re-login on 401
+    session_token = alert_login(alerts_cfg)
+    cookies = {"trade_alert_session": session_token} if session_token else {}
 
     while True:
         try:
@@ -658,6 +688,12 @@ def sse_listener(config, alert_q):
                     try:
                         r = requests.get(messages_url, cookies=cookies,
                                          headers=headers, timeout=10)
+                        if r.status_code == 401:
+                            logging.info("Alert session expired — re-logging in")
+                            session_token = alert_login(alerts_cfg)
+                            cookies = {"trade_alert_session": session_token} if session_token else {}
+                            r = requests.get(messages_url, cookies=cookies,
+                                             headers=headers, timeout=10)
                         payload = r.json()
                         items = payload if isinstance(payload, list) else payload.get("messages", [])
                         if items:

@@ -1,0 +1,713 @@
+#!/usr/bin/python3
+
+"""
+  btcticker2in13g.py - cryptocurrency ticker for Waveshare 2.13inch e-Paper HAT (G)
+  4-color ePaper display: black, white, red, yellow
+
+     Copyright (C) 2023 Veeb Projects https://veeb.ch
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <https://www.gnu.org/licenses/>
+"""
+
+from babel.numbers import decimal, format_currency
+from babel import Locale
+import argparse
+import textwrap
+import socket
+import yaml
+import matplotlib.pyplot as plt
+from PIL import Image, ImageOps
+from PIL import ImageFont
+from PIL import ImageDraw
+import currency
+import os
+import sys
+import logging
+import RPi.GPIO as GPIO
+from waveshare_epd import epd2in13g
+import time
+import threading
+import queue
+import requests
+import json
+import matplotlib as mpl
+
+mpl.use("Agg")
+
+# The 4 colors supported by the display
+BLACK  = (0,   0,   0)
+WHITE  = (255, 255, 255)
+RED    = (255, 0,   0)
+YELLOW = (255, 255, 0)
+
+dirname = os.path.dirname(__file__)
+picdir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "images")
+fontdir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "fonts/googlefonts")
+configfile = os.path.join(os.path.dirname(os.path.realpath(__file__)), "config.yaml")
+font_date = ImageFont.truetype(os.path.join(fontdir, "PixelSplitter-Bold.ttf"), 11)
+headers = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36"
+}
+button_pressed = 0
+alert_queue = queue.Queue()
+
+
+def internet(hostname="google.com"):
+    try:
+        host = socket.gethostbyname(hostname)
+        s = socket.create_connection((host, 80), 2)
+        s.close()
+        return True
+    except:
+        logging.info("No internet")
+        time.sleep(1)
+    return False
+
+
+def human_format(num):
+    num = float("{:.3g}".format(num))
+    magnitude = 0
+    while abs(num) >= 1000:
+        magnitude += 1
+        num /= 1000.0
+    return "{}{}".format(
+        "{:f}".format(num).rstrip("0").rstrip("."), ["", "K", "M", "B", "T"][magnitude]
+    )
+
+
+def _place_text(img, text, x_offset=0, y_offset=0, fontsize=40, fontstring="Forum-Regular", fill=BLACK):
+    draw = ImageDraw.Draw(img)
+    try:
+        filename = os.path.join(dirname, "./fonts/googlefonts/" + fontstring + ".ttf")
+        font = ImageFont.truetype(filename, fontsize)
+    except OSError:
+        font = ImageFont.truetype("/usr/share/fonts/TTF/DejaVuSans.ttf", fontsize)
+    img_width, img_height = img.size
+    try:
+        text_width = font.getbbox(text)[2]
+        text_height = font.getbbox(text)[3]
+    except:
+        text_width = font.getsize(text)[0]
+        text_height = font.getsize(text)[1]
+    draw_x = (img_width - text_width) // 2 + x_offset
+    draw_y = (img_height - text_height) // 2 + y_offset
+    draw.text((draw_x, draw_y), text, font=font, fill=fill)
+
+
+def writewrappedlines(img, text, fontsize=16, y_text=20, height=15, width=25, fontstring="Roboto-Light", fill=BLACK):
+    lines = textwrap.wrap(text, width)
+    for line in lines:
+        _place_text(img, line, 0, y_text, fontsize, fontstring, fill)
+        y_text += height
+    return img
+
+
+def getgecko(url):
+    try:
+        geckojson = requests.get(url, headers=headers).json()
+        connectfail = False
+    except requests.exceptions.RequestException as e:
+        logging.error("Issue with CoinGecko")
+        connectfail = True
+        geckojson = {}
+    return geckojson, connectfail
+
+
+def getData(config, other):
+    if config["ticker"].get("datasource") == "binance_perp":
+        return getBinanceFutures(config, other)
+    sleep_time = 10
+    num_retries = 5
+    whichcoin, fiat = configtocoinandfiat(config)
+    logging.info("Getting Data")
+    days_ago = int(config["ticker"]["sparklinedays"])
+    endtime = int(time.time())
+    starttime = endtime - 60 * 60 * 24 * days_ago
+    fiathistory = fiat
+    if fiat == "usdt":
+        fiathistory = "usd"
+    geckourlhistorical = (
+        "https://api.coingecko.com/api/v3/coins/"
+        + whichcoin
+        + "/market_chart/range?vs_currency="
+        + fiathistory
+        + "&from="
+        + str(starttime)
+        + "&to="
+        + str(endtime)
+    )
+    timeseriesstack = []
+    for x in range(0, num_retries):
+        rawtimeseries, connectfail = getgecko(geckourlhistorical)
+        if not connectfail:
+            timeseriesarray = rawtimeseries["prices"]
+            timeseriesstack = [float(p[1]) for p in timeseriesarray]
+            time.sleep(1)
+
+        if config["ticker"]["exchange"] == "default":
+            geckourl = (
+                "https://api.coingecko.com/api/v3/coins/markets?vs_currency="
+                + fiat
+                + "&ids="
+                + whichcoin
+            )
+            rawlivecoin, connectfail = getgecko(geckourl)
+            if not connectfail:
+                liveprice = rawlivecoin[0]
+                pricenow = float(liveprice["current_price"])
+                alltimehigh = float(liveprice["ath"])
+                try:
+                    other["market_cap_rank"] = int(liveprice["market_cap_rank"])
+                except:
+                    config["display"]["showrank"] = False
+                    other["market_cap_rank"] = 0
+                other["volume"] = float(liveprice["total_volume"])
+                timeseriesstack.append(pricenow)
+                other["ATH"] = pricenow > alltimehigh
+        else:
+            geckourl = (
+                "https://api.coingecko.com/api/v3/exchanges/"
+                + config["ticker"]["exchange"]
+                + "/tickers?coin_ids="
+                + whichcoin
+                + "&include_exchange_logo=false"
+            )
+            rawlivecoin, connectfail = getgecko(geckourl)
+            if not connectfail:
+                upperfiat = fiat.upper()
+                theindex = next(
+                    (i for i, t in enumerate(rawlivecoin["tickers"]) if t["target"] == upperfiat),
+                    -1
+                )
+                if theindex == -1:
+                    logging.error("Exchange not listing in " + upperfiat + ". Shutting down.")
+                    sys.exit()
+                liveprice = rawlivecoin["tickers"][theindex]
+                pricenow = float(liveprice["last"])
+                other["market_cap_rank"] = 0
+                other["volume"] = float(liveprice["converted_volume"]["usd"])
+                timeseriesstack.append(pricenow)
+                other["ATH"] = pricenow > 1000000.0
+
+        if connectfail:
+            logging.warning("Retrying in %d seconds", sleep_time)
+            time.sleep(sleep_time)
+            sleep_time *= 2
+        else:
+            break
+    return timeseriesstack, other
+
+
+def getBinanceFutures(config, other):
+    """Fetch BTCUSDT perpetual futures price and kline history from Binance FAPI."""
+    days_ago = int(config["ticker"]["sparklinedays"])
+    limit = min(days_ago * 24, 1500)  # hourly candles, Binance max 1500
+    sleep_time = 10
+    num_retries = 5
+
+    for attempt in range(num_retries):
+        try:
+            # Historical klines for sparkline
+            klines_url = (
+                "https://fapi.binance.com/fapi/v1/klines"
+                "?symbol=BTCUSDT&interval=1h&limit=" + str(limit)
+            )
+            klines = requests.get(klines_url, headers=headers, timeout=10).json()
+            pricestack = [float(k[4]) for k in klines]  # close prices
+
+            # Live mark price + funding rate
+            mark_url = "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=BTCUSDT"
+            mark_data = requests.get(mark_url, headers=headers, timeout=10).json()
+            pricenow = float(mark_data["markPrice"])
+            funding_rate = float(mark_data["lastFundingRate"]) * 100  # as percent
+
+            pricestack.append(pricenow)
+            other["ATH"] = False
+            other["volume"] = 0
+            other["market_cap_rank"] = 0
+            other["funding_rate"] = funding_rate
+            return pricestack, other
+
+        except Exception as e:
+            logging.warning("Binance fetch error (attempt %d): %s", attempt + 1, e)
+            time.sleep(sleep_time)
+            sleep_time *= 2
+
+    return [], other
+
+
+def beanaproblem(message):
+    thebean = Image.open(os.path.join(picdir, "thebean.bmp"))
+    image = Image.new("RGB", (250, 122), WHITE)
+    draw = ImageDraw.Draw(image)
+    bean_rgb = thebean.convert("RGB")
+    image.paste(bean_rgb, (60, 10))
+    draw.text((10, 5), str(time.strftime("%-H:%M, %-d %b %Y")), font=font_date, fill=BLACK)
+    writewrappedlines(image, "Issue: " + message, fill=RED)
+    return image
+
+
+def makeSpark(pricestack, positive_change):
+    themean = sum(pricestack) / float(len(pricestack))
+    x = [xx - themean for xx in pricestack]
+    line_color = "#ffff00" if positive_change else "#ff0000"  # yellow or red
+    fig, ax = plt.subplots(1, 1, figsize=(10, 3))
+    fig.patch.set_facecolor("white")
+    plt.plot(x, color=line_color, linewidth=6)
+    plt.plot(len(x) - 1, x[-1], color=line_color, marker="o")
+    for k, v in ax.spines.items():
+        v.set_visible(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_facecolor("white")
+    ax.axhline(c="black", linewidth=4, linestyle=(0, (5, 2, 1, 2)))
+    plt.savefig(os.path.join(picdir, "spark.png"), dpi=17)
+    imgspk = Image.open(os.path.join(picdir, "spark.png")).convert("RGB")
+    imgspk.save(os.path.join(picdir, "spark.bmp"))
+    plt.close(fig)
+    plt.cla()
+    ax.cla()
+    imgspk.close()
+
+
+def custom_format_currency(value, currency_code, locale):
+    value = decimal.Decimal(value)
+    locale = Locale.parse(locale)
+    pattern = locale.currency_formats["standard"]
+    force_frac = (0, 0) if value == int(value) else None
+    return pattern.apply(value, locale, currency=currency_code, force_frac=force_frac)
+
+
+def updateDisplay(config, pricestack, other):
+    whichcoin, fiat = configtocoinandfiat(config)
+    days_ago = int(config["ticker"]["sparklinedays"])
+    pricenow = pricestack[-1]
+    pricechangeraw = round((pricestack[-1] - pricestack[0]) / pricestack[-1] * 100, 2)
+    positive_change = pricechangeraw >= 0
+    change_color = YELLOW if positive_change else RED
+
+    if pricechangeraw >= 10:
+        pricechange = str("%+d" % pricechangeraw) + "%"
+    else:
+        pricechange = str("%+.2f" % pricechangeraw) + "%"
+
+    if "24h" in config["display"] and config["display"]["24h"]:
+        timestamp = str(time.strftime("%-H:%M, %d %b %Y"))
+    else:
+        timestamp = str(time.strftime("%-I:%M %p, %d %b %Y"))
+
+    localetag = config["display"].get("locale", "en_US")
+
+    fiatupper = fiat.upper()
+    if fiatupper == "USDT":
+        fiatupper = "USD"
+    if fiatupper == "BTC":
+        fiatupper = "₿"
+
+    fontreduce = 0
+    if pricenow > 10000:
+        pricestring = custom_format_currency(int(pricenow), fiatupper, localetag)
+    else:
+        pricestring = format_currency(pricenow, fiatupper, locale=localetag, decimal_quantization=False)
+    if len(pricestring) > 9:
+        fontreduce = 15
+
+    # Token image
+    currencythumbnail = "currency/" + whichcoin + ".bmp"
+    tokenfilename = os.path.join(picdir, currencythumbnail)
+    if os.path.isfile(tokenfilename):
+        tokenimage = Image.open(tokenfilename).convert("RGB")
+    else:
+        tokenimageurl = (
+            "https://api.coingecko.com/api/v3/coins/"
+            + whichcoin
+            + "?tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false"
+        )
+        rawimage = requests.get(tokenimageurl, headers=headers).json()
+        tokenimage = Image.open(
+            requests.get(rawimage["image"]["large"], headers=headers, stream=True).raw
+        ).convert("RGBA")
+        tokenimage.thumbnail((100, 100), Image.BICUBIC)
+        new_image = Image.new("RGBA", (120, 120), "WHITE")
+        new_image.paste(tokenimage, (10, 10), tokenimage)
+        tokenimage = new_image.convert("RGB")
+        tokenimage.thumbnail((100, 100), Image.BICUBIC)
+        tokenimage.save(tokenfilename)
+
+    sparkbitmap = Image.open(os.path.join(picdir, "spark.bmp")).convert("RGB")
+    ATHbitmap = Image.open(os.path.join(picdir, "ATH.bmp")).convert("RGB")
+
+    try:
+        font_price_ls = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 18 - fontreduce)
+        font_price_pt = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 16 - fontreduce)
+    except OSError:
+        font_price_ls = ImageFont.load_default()
+        font_price_pt = ImageFont.load_default()
+
+    # Landscape layout (250x122) for orientations 90 and 270
+    if config["display"]["orientation"] in (90, 270):
+        image = Image.new("RGB", (250, 122), WHITE)
+        draw = ImageDraw.Draw(image)
+
+        # Token left side, vertically centred
+        image.paste(tokenimage.resize((80, 80), Image.BICUBIC), (0, 21))
+
+        # Right panel: timestamp, price, change, volume
+        draw.text((85, 4),  timestamp, font=font_date, fill=BLACK)
+        draw.text((85, 20), pricestring, font=font_price_ls, fill=BLACK)
+        draw.text((85, 44), str(days_ago) + " day : ", font=font_date, fill=BLACK)
+        draw.text((145, 44), pricechange, font=font_date, fill=change_color)
+
+        if config["ticker"].get("datasource") == "binance_perp" and "funding_rate" in other:
+            fr = other["funding_rate"]
+            fr_color = YELLOW if fr >= 0 else RED
+            draw.text((85, 57), "fund: " + ("%+.4f" % fr) + "%", font=font_date, fill=fr_color)
+        elif config["display"].get("showvolume"):
+            draw.text((85, 57), "vol : " + human_format(other["volume"]), font=font_date, fill=BLACK)
+
+        if config["display"].get("showrank") and other.get("market_cap_rank", 0) > 1:
+            draw.text((85, 70), "rank : " + str(other["market_cap_rank"]), font=font_date, fill=BLACK)
+
+        if other.get("ATH"):
+            image.paste(ATHbitmap, (210, 4))
+
+        # Sparkline bottom strip
+        spark_ls = sparkbitmap.resize((165, 40), Image.BICUBIC)
+        image.paste(spark_ls, (85, 80))
+
+        if config["display"]["orientation"] == 270:
+            image = image.rotate(180, expand=True)
+
+    # Portrait layout (122x250) for orientations 0 and 180
+    else:
+        image = Image.new("RGB", (122, 250), WHITE)
+        draw = ImageDraw.Draw(image)
+
+        draw.text((5, 5), timestamp, font=font_date, fill=BLACK)
+        image.paste(tokenimage.resize((80, 80), Image.BICUBIC), (21, 20))
+        draw.text((5, 108), str(days_ago) + " day :", font=font_date, fill=BLACK)
+        draw.text((5, 121), pricechange, font=font_date, fill=change_color)
+        draw.text((5, 138), pricestring, font=font_price_pt, fill=BLACK)
+
+        # Sparkline resized to fit portrait width
+        spark_pt = sparkbitmap.resize((110, 34), Image.BICUBIC)
+        image.paste(spark_pt, (6, 178))
+
+        if config["display"]["orientation"] == 180:
+            image = image.rotate(180, expand=True)
+
+    if config["display"]["inverted"]:
+        # Invert only the black/white channel; swap red<->yellow to preserve color intent
+        r, g, b = image.split()
+        r = ImageOps.invert(r)
+        g = ImageOps.invert(g)
+        b = ImageOps.invert(b)
+        image = Image.merge("RGB", (r, g, b))
+
+    return image
+
+
+def currencystringtolist(currstring):
+    curr_list = currstring.split(",")
+    curr_list = [x.strip(" ") for x in curr_list]
+    return curr_list
+
+
+def currencycycle(curr_string):
+    curr_list = currencystringtolist(curr_string)
+    curr_list = curr_list[1:] + curr_list[:1]
+    return curr_list
+
+
+def display_image(img):
+    epd = epd2in13g.EPD()
+    epd.init()
+    epd.display(epd.getbuffer(img))
+    epd.sleep()
+    thekeys = initkeys()
+    removekeyevent(thekeys)
+    addkeyevent(thekeys)
+    logging.info("Sent image to screen")
+
+
+def initkeys():
+    key1, key2, key3, key4 = 5, 6, 13, 19
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setup(key1, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.setup(key2, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.setup(key3, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.setup(key4, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    return [key1, key2, key3, key4]
+
+
+def addkeyevent(thekeys):
+    btime = 500
+    GPIO.add_event_detect(thekeys[0], GPIO.FALLING, callback=keypress, bouncetime=btime)
+    GPIO.add_event_detect(thekeys[1], GPIO.FALLING, callback=keypress, bouncetime=btime)
+    GPIO.add_event_detect(thekeys[2], GPIO.FALLING, callback=keypress, bouncetime=btime)
+    GPIO.add_event_detect(thekeys[3], GPIO.FALLING, callback=keypress, bouncetime=btime)
+
+
+def removekeyevent(thekeys):
+    GPIO.remove_event_detect(thekeys[0])
+    GPIO.remove_event_detect(thekeys[1])
+    GPIO.remove_event_detect(thekeys[2])
+    GPIO.remove_event_detect(thekeys[3])
+
+
+def keypress(channel):
+    global button_pressed
+    with open(configfile) as f:
+        config = yaml.load(f, Loader=yaml.FullLoader)
+    lastcoinfetch = time.time()
+    if channel == 5 and button_pressed == 0:
+        logging.info("Cycle currencies")
+        button_pressed = 1
+        config["ticker"]["currency"] = ",".join(currencycycle(config["ticker"]["currency"]))
+        fullupdate(config, lastcoinfetch)
+        configwrite(config)
+    elif channel == 6 and button_pressed == 0:
+        logging.info("Rotate -90")
+        button_pressed = 1
+        config["display"]["orientation"] = (config["display"]["orientation"] + 90) % 360
+        fullupdate(config, lastcoinfetch)
+        configwrite(config)
+    elif channel == 13 and button_pressed == 0:
+        logging.info("Invert Display")
+        button_pressed = 1
+        config["display"]["inverted"] = not config["display"]["inverted"]
+        fullupdate(config, lastcoinfetch)
+        configwrite(config)
+    elif channel == 19 and button_pressed == 0:
+        logging.info("Cycle fiat")
+        button_pressed = 1
+        config["ticker"]["fiatcurrency"] = ",".join(currencycycle(config["ticker"]["fiatcurrency"]))
+        fullupdate(config, lastcoinfetch)
+        configwrite(config)
+
+
+def configwrite(config):
+    with open(configfile, "w") as f:
+        yaml.dump(config, f)
+    global button_pressed
+    button_pressed = 0
+
+
+def fullupdate(config, lastcoinfetch):
+    other = {}
+    try:
+        pricestack, other = getData(config, other)
+        positive_change = pricestack[-1] >= pricestack[0]
+        makeSpark(pricestack, positive_change)
+        image = updateDisplay(config, pricestack, other)
+        display_image(image)
+        lastgrab = time.time()
+        time.sleep(0.2)
+    except Exception as e:
+        image = beanaproblem(str(e) + " Line: " + str(e.__traceback__.tb_lineno))
+        display_image(image)
+        time.sleep(20)
+        lastgrab = lastcoinfetch
+    return lastgrab
+
+
+def configtocoinandfiat(config):
+    crypto_list = currencystringtolist(config["ticker"]["currency"])
+    fiat_list = currencystringtolist(config["ticker"]["fiatcurrency"])
+    return crypto_list[0], fiat_list[0]
+
+
+def gettrending(config):
+    coinlist = config["ticker"]["currency"]
+    url = "https://api.coingecko.com/api/v3/search/trending"
+    config["display"]["cycle"] = True
+    trendingcoins = requests.get(url, headers=headers).json()
+    for i in range(len(trendingcoins["coins"])):
+        coinlist += "," + str(trendingcoins["coins"][i]["item"]["id"])
+    config["ticker"]["currency"] = coinlist
+    return config
+
+
+def render_alert(text, config):
+    """Render a TradingView alert as a full-screen image."""
+    try:
+        font_title = ImageFont.truetype(os.path.join(fontdir, "IBMPlexSans-Medium.ttf"), 14)
+        font_body  = ImageFont.truetype(os.path.join(fontdir, "Roboto-Light.ttf"), 12)
+    except OSError:
+        font_title = ImageFont.load_default()
+        font_body  = ImageFont.load_default()
+
+    orientation = config["display"]["orientation"]
+
+    if orientation in (90, 270):
+        image = Image.new("RGB", (250, 122), WHITE)
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([(0, 0), (250, 20)], fill=RED)
+        draw.text((6, 4), "TRADINGVIEW ALERT", font=font_date, fill=WHITE)
+        lines = textwrap.wrap(text, width=40)
+        for i, line in enumerate(lines[:5]):
+            draw.text((6, 26 + i * 14), line, font=font_body, fill=BLACK)
+        if orientation == 270:
+            image = image.rotate(180, expand=True)
+    else:
+        image = Image.new("RGB", (122, 250), WHITE)
+        draw = ImageDraw.Draw(image)
+        draw.rectangle([(0, 0), (122, 20)], fill=RED)
+        draw.text((4, 4), "TV ALERT", font=font_date, fill=WHITE)
+        lines = textwrap.wrap(text, width=18)
+        for i, line in enumerate(lines[:12]):
+            draw.text((4, 26 + i * 18), line, font=font_body, fill=BLACK)
+        if orientation == 180:
+            image = image.rotate(180, expand=True)
+
+    if config["display"].get("inverted"):
+        r, g, b = image.split()
+        image = Image.merge("RGB", (ImageOps.invert(r), ImageOps.invert(g), ImageOps.invert(b)))
+
+    return image
+
+
+def sse_listener(config, alert_q):
+    """Background thread: streams the TradingView app SSE endpoint and queues alert text."""
+    alerts_cfg = config.get("alerts", {})
+    server = alerts_cfg.get("server", "").rstrip("/")
+    session_token = alerts_cfg.get("session_token", "")
+
+    if not server:
+        logging.info("alerts.server not configured — SSE listener disabled")
+        return
+
+    sse_url      = server + "/api/messages/stream"
+    messages_url = server + "/api/messages?page=1&limit=1"
+    cookies = {"trade_alert_session": session_token} if session_token else {}
+    retry_delay = 5
+
+    while True:
+        try:
+            logging.info("Connecting to alert SSE stream: " + sse_url)
+            with requests.get(sse_url, stream=True, timeout=90, headers=headers) as resp:
+                retry_delay = 5  # reset backoff on successful connect
+                for raw in resp.iter_lines():
+                    line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        data = json.loads(line[5:].strip())
+                    except ValueError:
+                        continue
+                    if data.get("type") != "new-message":
+                        continue
+                    # Fetch the message text
+                    try:
+                        r = requests.get(messages_url, cookies=cookies,
+                                         headers=headers, timeout=10)
+                        payload = r.json()
+                        items = payload if isinstance(payload, list) else payload.get("messages", [])
+                        if items:
+                            alert_q.put(items[0]["text"])
+                            logging.info("Alert queued: " + items[0]["text"])
+                    except Exception as fetch_err:
+                        logging.error("Failed to fetch alert message: " + str(fetch_err))
+        except Exception as conn_err:
+            logging.error("SSE connection lost: " + str(conn_err))
+
+        logging.info("SSE reconnecting in %ds", retry_delay)
+        time.sleep(retry_delay)
+        retry_delay = min(retry_delay * 2, 60)
+
+
+def main():
+    GPIO.setmode(GPIO.BCM)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--log", default="info", help="Set the log level (default: info)")
+    args = parser.parse_args()
+    loglevel = getattr(logging, args.log.upper(), logging.WARN)
+    logging.basicConfig(level=loglevel)
+
+    try:
+        os.system("sudo /home/pi/.local/bin/tzupdate")
+    except:
+        logging.info("Timezone Not Set")
+
+    try:
+        logging.info("epd2in13g BTC Frame")
+        with open(configfile) as f:
+            config = yaml.load(f, Loader=yaml.FullLoader)
+        logging.info(config)
+        config["display"]["orientation"] = int(config["display"]["orientation"])
+        staticcoins = config["ticker"]["currency"]
+
+        thekeys = initkeys()
+        addkeyevent(thekeys)
+
+        howmanycoins = len(config["ticker"]["currency"].split(","))
+        datapulled = False
+        lastcoinfetch = time.time()
+
+        updatefrequency = max(60.0, float(config["ticker"]["updatefrequency"]))
+
+        while not internet():
+            logging.info("Waiting for internet")
+
+        # Start TradingView alert listener if configured
+        if config.get("alerts", {}).get("server"):
+            t = threading.Thread(target=sse_listener, args=(config, alert_queue), daemon=True)
+            t.start()
+            logging.info("Alert SSE listener started")
+
+        alert_duration = int(config.get("alerts", {}).get("display_seconds", 10))
+
+        while True:
+            # Show TradingView alert if one arrived
+            if not alert_queue.empty():
+                alert_text = alert_queue.get()
+                logging.info("Displaying alert: " + alert_text)
+                display_image(render_alert(alert_text, config))
+                time.sleep(alert_duration)
+                lastcoinfetch = 0  # force immediate price refresh after alert
+
+            if config["display"]["trendingmode"]:
+                if (time.time() - lastcoinfetch > (7 + howmanycoins) * updatefrequency) or not datapulled:
+                    config["ticker"]["currency"] = staticcoins
+                    config = gettrending(config)
+
+            if (time.time() - lastcoinfetch > updatefrequency) or not datapulled:
+                if config["display"]["cycle"] and datapulled:
+                    crypto_list = currencycycle(config["ticker"]["currency"])
+                    fiat_list = currencycycle(config["ticker"]["fiatcurrency"])
+                    config["ticker"]["currency"] = ",".join(crypto_list)
+                    if config["display"].get("cyclefiat"):
+                        config["ticker"]["fiatcurrency"] = ",".join(fiat_list)
+                    config["display"]["inverted"] = not config["display"]["inverted"]
+                lastcoinfetch = fullupdate(config, lastcoinfetch)
+                datapulled = True
+
+            time.sleep(0.01)
+
+    except IOError as e:
+        logging.error(e)
+        display_image(beanaproblem(str(e)))
+    except Exception as e:
+        logging.error(e)
+        display_image(beanaproblem(str(e)))
+    except KeyboardInterrupt:
+        logging.info("ctrl + c:")
+        display_image(beanaproblem("Keyboard Interrupt"))
+        epd2in13g.epdconfig.module_exit()
+        GPIO.cleanup()
+        exit()
+
+
+if __name__ == "__main__":
+    main()

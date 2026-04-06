@@ -14,3 +14,6 @@ ticker:
   fiatcurrency: usd,btc,gbp # 'fiat' currency
   sparklinedays: 1 # Time period shown on sparkline graph
   updatefrequency: 300 # How often price is refreshed (seconds) (lower limit 60s)
+  # datasource: binance_perp  # Uncomment to use Binance BTCUSDT perpetual futures instead of CoinGecko
+  #   When enabled: set currency to 'bitcoin' (for the logo), fiatcurrency to 'usd'
+  #   Price = mark price, sparkline = hourly closes, funding rate shown instead of volume

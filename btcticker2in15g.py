@@ -303,7 +303,7 @@ def beanaproblem(message):
 def makeSpark(pricestack, positive_change):
     themean = sum(pricestack) / float(len(pricestack))
     x = [xx - themean for xx in pricestack]
-    line_color = "#ffff00" if positive_change else "#ff0000"  # yellow or red
+    line_color = "#ff0000"  # always red — yellow is near-invisible on white ePaper
     fig, ax = plt.subplots(1, 1, figsize=(10, 3))
     fig.patch.set_facecolor("white")
     plt.plot(x, color=line_color, linewidth=6)
@@ -480,9 +480,10 @@ def display_image(img):
     global _epd
     if _epd is None:
         _epd = epd2in15g.EPD()
-    _epd.init()
+        _epd.init()  # init only once per session — avoids extra clear/reset flicker
     _epd.display(_epd.getbuffer(img))
-    _epd.sleep()
+    # No sleep() between updates — keeps display ready and avoids re-init overhead.
+    # sleep() is called on KeyboardInterrupt only.
     logging.info("Sent image to screen")
 
 
@@ -748,6 +749,7 @@ def main():
         logging.info("ctrl + c:")
         display_image(beanaproblem("Keyboard Interrupt"))
         if _epd is not None:
+            _epd.sleep()
             epd2in15g.epdconfig.module_exit()
         exit()
 

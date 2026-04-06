@@ -1,4 +1,4 @@
-> **Private fork.** This is a personal fork of [veebch/btcticker](https://github.com/veebch/btcticker), customised for private use with a **Waveshare 2.13inch e-Paper HAT (G)** on a **Pi Zero 2W**, using **Binance USDT perpetual futures** as the default data source. See [INSTALL_PI_ZERO.md](INSTALL_PI_ZERO.md) for setup instructions.
+> **Private fork.** This is a personal fork of [veebch/btcticker](https://github.com/veebch/btcticker), customised for private use with a **Waveshare 2.15inch e-Paper HAT (G)** on a **Pi Zero 2W**, using **Binance USDT perpetual futures** as the default data source. See [INSTALL_PI_ZERO.md](INSTALL_PI_ZERO.md) for setup instructions.
 
 ---
 

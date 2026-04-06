@@ -1,4 +1,4 @@
-# Installation: Pi Zero 2W + Waveshare 2.13inch e-Paper HAT (G)
+# Installation: Pi Zero 2W + Waveshare 2.15inch e-Paper HAT (G)
 
 ## 1. Flash the OS
 
@@ -88,7 +88,7 @@ rm -rf ~/e-Paper
 
 Verify the driver file exists:
 ```bash
-ls ~/btcticker/waveshare_epd/epd2in13g.py
+ls ~/btcticker/waveshare_epd/epd2in15g.py
 ```
 
 ## 8. Install Remaining Python Dependencies
@@ -128,13 +128,13 @@ ticker:
 
 > **Data source:** Binance USDT perpetual futures is the default. To use CoinGecko instead, add `datasource: coingecko` under `ticker:`.
 >
-> **Display resolution:** The driver always expects a portrait 122×250 image. Landscape orientations (90/270) are rendered internally and rotated before being passed to the driver.
+> **Display resolution:** The driver always expects a portrait 160×296 image. Landscape orientations (90/270) are rendered internally as 296×160 and rotated before being passed to the driver.
 
 ## 10. Test Run
 
 ```bash
 cd ~/btcticker
-python3 btcticker2in13g.py --log debug
+python3 btcticker2in15g.py --log debug
 ```
 
 First run fetches the coin logo and may take ~30s. Check for errors before proceeding.
@@ -155,7 +155,7 @@ Wants=network-online.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/btcticker
-ExecStart=/home/pi/btcticker/.venv/bin/python3 /home/pi/btcticker/btcticker2in13g.py
+ExecStart=/home/pi/btcticker/.venv/bin/python3 /home/pi/btcticker/btcticker2in15g.py
 Restart=always
 RestartSec=30
 StandardOutput=journal

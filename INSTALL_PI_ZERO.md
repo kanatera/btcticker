@@ -130,10 +130,25 @@ ticker:
 >
 > **Display resolution:** The driver always expects a portrait 160×296 image. Landscape orientations (90/270) are rendered internally as 296×160 and rotated before being passed to the driver.
 
+### TradingView Alerts (optional)
+
+To display alerts from a TradingView webhook relay app on the screen, add an `alerts` section:
+
+```yaml
+alerts:
+  server: http://192.168.x.x:PORT   # base URL of your alert relay app
+  username: your_username           # auto-login — token is fetched at startup
+  password: your_password           #   and refreshed automatically on expiry
+  display_seconds: 10               # how long to show alert before returning to price
+```
+
+The ticker connects to the relay app's SSE stream and displays incoming alerts full-screen with a red header. After `display_seconds` it returns to the price display automatically.
+
 ## 10. Test Run
 
 ```bash
 cd ~/btcticker
+source .venv/bin/activate
 python3 btcticker2in15g.py --log debug
 ```
 
@@ -153,9 +168,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/btcticker
-ExecStart=/home/pi/btcticker/.venv/bin/python3 /home/pi/btcticker/btcticker2in15g.py
+User=YOUR_USERNAME
+WorkingDirectory=/home/YOUR_USERNAME/btcticker
+ExecStart=/home/YOUR_USERNAME/btcticker/.venv/bin/python3 /home/YOUR_USERNAME/btcticker/btcticker2in15g.py
 Restart=always
 RestartSec=30
 StandardOutput=journal
@@ -164,6 +179,8 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 ```
+
+> Replace `YOUR_USERNAME` with your actual Pi username throughout (the one you set in Raspberry Pi Imager).
 
 ```bash
 sudo systemctl daemon-reload
@@ -185,7 +202,7 @@ The device polls GitHub every 5 minutes and restarts itself when new commits are
 
 **Allow the service user to restart btcticker without a password:**
 ```bash
-echo 'pi ALL=(ALL) NOPASSWD: /bin/systemctl restart btcticker' \
+echo 'YOUR_USERNAME ALL=(ALL) NOPASSWD: /bin/systemctl restart btcticker' \
   | sudo tee /etc/sudoers.d/btcticker-update
 sudo chmod 440 /etc/sudoers.d/btcticker-update
 ```
@@ -203,8 +220,8 @@ Description=Check for btcticker updates on GitHub
 
 [Service]
 Type=oneshot
-User=pi
-ExecStart=/home/pi/btcticker/autoupdate.sh
+User=YOUR_USERNAME
+ExecStart=/home/YOUR_USERNAME/btcticker/autoupdate.sh
 StandardOutput=journal
 StandardError=journal
 EOF
@@ -233,3 +250,11 @@ journalctl -u btcticker-update.service -f
 ```
 
 Now pushing to `main` on GitHub will be picked up within 5 minutes and the display will restart automatically.
+
+> **Tip:** To test the autoupdate immediately without waiting for the timer, run:
+> ```bash
+> sudo systemctl start btcticker-update.service
+> journalctl -u btcticker-update.service -f
+> ```
+
+> **Note:** Replace `YOUR_USERNAME` in both service files and the sudoers rule with your actual Pi username. A mismatch causes `status=217/USER` errors.
